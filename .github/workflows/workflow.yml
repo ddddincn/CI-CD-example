@@ -11,8 +11,12 @@ on:
       - main
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # 使用 toLower 函数将仓库名转为小写
+  IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name }}
+  RepositoryName: ci-cd-example
+
 
 jobs:
   # ==================== CI 阶段 ====================
@@ -54,9 +58,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{env.RepositoryName}}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha
 
       - name: Build and push Docker image
@@ -66,6 +70,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ==================== CD - 部署到测试环境 ====================
   deploy-staging:
@@ -83,15 +89,15 @@ jobs:
             # 登录容器镜像仓库
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # 拉取最新镜像
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            # 拉取最新镜像（使用小写仓库名）
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{env.RepositoryName}}:latest
 
             # 停止并删除旧容器
-            docker stop app || true
-            docker rm app || true
+            docker stop ${{env.RepositoryName}} || true
+            docker rm ${{env.RepositoryName}} || true
 
-            # 启动新容器
-            docker run -d --name app -p 8080:8080 --restart=always ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            # 启动新容器（使用小写仓库名）
+            docker run -d --name ${{env.RepositoryName}} -p 8080:8080 --restart=always ${{ env.REGISTRY }}/${{ github.repository_owner }}/ci-cd-example:latest
 
             # 清理旧镜像
             docker image prune -f
