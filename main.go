@@ -10,7 +10,7 @@ func main() {
 	h := handler.NewHandler()
 	engine := gin.Default()
 	engine.GET("/", h.HelloWorld)
-	if err := engine.Run(":8888"); err != nil {
+	if err := engine.Run(":8080"); err != nil {
 		panic(err)
 	}
 }

@@ -1,16 +1,22 @@
-name: workflow.yml
+name: CI/CD Pipeline
+
 on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
-    types:
-      - opened
-jobs:
 
-  build:
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ==================== CI 阶段 ====================
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,10 +24,99 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build
         run: go build -v ./...
 
       - name: Test
         run: go test -v ./...
+
+  # ==================== CD - 构建镜像 ====================
+  build-image:
+    needs: [build-and-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ==================== CD - 部署到测试环境 ====================
+  deploy-staging:
+    needs: [build-image]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: http://${{ secrets.SSH_HOST_DEV }}:8080
+    steps:
+      - name: Deploy to staging
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST_DEV }}
+          username: ${{ secrets.SSH_USER_DEV }}
+          key: ${{ secrets.SSH_PRIVATE_KEY_DEV }}
+          script: |
+            # 登录容器镜像仓库
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # 拉取最新镜像
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+            # 停止并删除旧容器
+            docker stop app || true
+            docker rm app || true
+
+            # 启动新容器
+            docker run -d --name app -p 8080:8080 --restart=always ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+            # 清理旧镜像
+            docker image prune -f
+
+  # # ==================== CD - 部署到生产环境 ====================
+  # deploy-production:
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   environment:
+  #     name: production
+  #     url: http://${{ secrets.SSH_HOST_DEV }}:8080
+  #   steps:
+  #     - name: Deploy to production
+  #       uses: appleboy/ssh-action@v1.0.3
+  #       with:
+  #         host: ${{ secrets.SSH_HOST_PROD }}
+  #         username: ${{ secrets.SSH_USER_PROD }}
+  #         key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
+  #         script: |
+  #           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+  #           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+  #           docker stop app || true
+  #           docker rm app || true
+  #           docker run -d --name app -p 8080:8080 --restart=always ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+  #           docker image prune -f
