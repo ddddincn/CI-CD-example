@@ -70,8 +70,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=inline
+          cache-to: type=inline
 
   # ==================== CD - 部署到测试环境 ====================
   deploy-staging:
@@ -97,7 +97,7 @@ jobs:
             docker rm ${{env.RepositoryName}} || true
 
             # 启动新容器（使用小写仓库名）
-            docker run -d --name ${{env.RepositoryName}} -p 8080:8080 --restart=always ${{ env.REGISTRY }}/${{ github.repository_owner }}/ci-cd-example:latest
+            docker run -d --name ${{env.RepositoryName}} -p 8080:8080 --restart=always ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{env.RepositoryName}}:latest
 
             # 清理旧镜像
             docker image prune -f
